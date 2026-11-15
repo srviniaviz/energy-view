@@ -9,19 +9,34 @@ internal readonly record struct ComponentPower(string Component, double? Watts, 
 
 internal readonly record struct LivePower(double? Watts, string Label)
 {
-    public static LivePower FromComponents(double? cpu, double? gpu) => (cpu, gpu) switch
+    public static LivePower FromComponents(double? cpu, double? gpu, double? monitors = null)
     {
-        (double cpuWatts, double gpuWatts) => new(cpuWatts + gpuWatts, "Potência de CPU + GPU"),
-        (double cpuWatts, null) => new(cpuWatts, "Potência da CPU"),
-        (null, double gpuWatts) => new(gpuWatts, "Potência da GPU"),
-        _ => new(null, "Potência monitorada")
-    };
+        if (monitors is double monitorWatts)
+        {
+            string label = (cpu.HasValue, gpu.HasValue) switch
+            {
+                (true, true) => "CPU + GPU + monitores",
+                (true, false) => "CPU + monitores",
+                (false, true) => "GPU + monitores",
+                _ => "Potência dos monitores"
+            };
+            return new(cpu.GetValueOrDefault() + gpu.GetValueOrDefault() + monitorWatts, label);
+        }
+
+        return (cpu, gpu) switch
+        {
+            (double cpuWatts, double gpuWatts) => new(cpuWatts + gpuWatts, "Potência de CPU + GPU"),
+            (double cpuWatts, null) => new(cpuWatts, "Potência da CPU"),
+            (null, double gpuWatts) => new(gpuWatts, "Potência da GPU"),
+            _ => new(null, "Potência monitorada")
+        };
+    }
 }
 
 internal static class PowerBreakdown
 {
     public static IReadOnlyList<ComponentPower> Build(IReadOnlyList<HardwarePowerSensor> sensors,
-        bool cpuDriverInstalled, double? cpu, double? gpu)
+        bool cpuDriverInstalled, double? cpu, double? gpu, double? monitors = null)
     {
         var cpuPackages = sensors.Where(IsCpuPackage).ToArray();
         bool hasSingleNvidiaPackage = gpu.HasValue &&
@@ -61,6 +76,8 @@ internal static class PowerBreakdown
         AddIfMissing("Ventoinhas e bomba", HardwareType.Cooler);
         AddIfMissing("Fonte de alimentação", HardwareType.Psu);
         rows.Add(new("USB alimentado pelo PC", null, "Sem leitura"));
+        if (monitors.HasValue)
+            rows.Add(new("Monitores cadastrados", monitors, "Estimado"));
         return rows;
 
         void AddIfMissing(string name, params HardwareType[] types)

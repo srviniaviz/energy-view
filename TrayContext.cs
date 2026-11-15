@@ -12,6 +12,11 @@ internal sealed class TrayContext : ApplicationContext
     private readonly EnergyHistory energy = new(
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "EnergyView", "energy-history.json"), TimeZoneInfo.Local);
+    private readonly EnergyPreferencesStore energyPreferences = new(
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "EnergyView", "energy-settings.json"));
+    private EnergyPreferences preferences;
+    private string? preferencesError;
     private readonly PowerPanel panel = new();
     private readonly System.Windows.Forms.Timer timer = new() { Interval = 1000 };
     private readonly ContextMenuStrip menu = new();
@@ -28,6 +33,7 @@ internal sealed class TrayContext : ApplicationContext
     private AppRelease? availableUpdate;
     private bool updating;
     private bool startsWithWindows;
+    private bool changingPowerPlan;
     private bool refreshing;
     private bool exiting;
     private bool installingDriver;
@@ -38,6 +44,16 @@ internal sealed class TrayContext : ApplicationContext
     {
         this.driverInstalled = driverInstalled;
         this.elevated = elevated;
+        try
+        {
+            preferences = energyPreferences.Load();
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Text.Json.JsonException)
+        {
+            preferences = new(null, []);
+            preferencesError = "Não foi possível ler as preferências de energia.";
+            Trace.TraceWarning("Energy preferences load failed: {0}", error);
+        }
         MainForm = panel;
         var toggle = new ToolStripMenuItem("Ocultar painel", null, (_, _) => TogglePanel());
         menu.Items.Add(toggle);
@@ -76,6 +92,11 @@ internal sealed class TrayContext : ApplicationContext
 
         panel.InstallDriverRequested += async (_, _) => await InstallDriverAsync();
         panel.Shown += async (_, _) => await RefreshReadingAsync();
+        panel.Shown += async (_, _) => await ReadPowerPlanAsync();
+        panel.ReadPowerPlanRequested += async (_, _) => await ReadPowerPlanAsync();
+        panel.PowerPlanRequested += async plan => await ChangePowerPlanAsync(plan);
+        panel.EditTariffRequested += (_, _) => EditTariff();
+        panel.EditMonitorsRequested += (_, _) => EditMonitors();
         panel.ToggleStartupRequested += (_, _) => ToggleStartup();
 
         timer.Tick += async (_, _) => await RefreshReadingAsync();
@@ -92,6 +113,79 @@ internal sealed class TrayContext : ApplicationContext
         if (installed)
             updateTimer.Start();
         timer.Start();
+    }
+
+    private void EditTariff()
+    {
+        using var dialog = new TariffDialog(preferences.Tariff, rate =>
+            SaveEnergyPreferences(preferences with { Tariff = rate }));
+        if (dialog.ShowDialog(panel) == DialogResult.OK)
+            UpdateDisplay();
+    }
+
+    private void EditMonitors()
+    {
+        using var dialog = new MonitorsDialog(preferences.Monitors, monitors =>
+            SaveEnergyPreferences(preferences with { Monitors = monitors }));
+        if (dialog.ShowDialog(panel) == DialogResult.OK)
+            UpdateDisplay();
+    }
+
+    private void SaveEnergyPreferences(EnergyPreferences settings)
+    {
+        energyPreferences.Save(settings);
+        preferences = settings;
+        preferencesError = null;
+    }
+
+    private async Task ReadPowerPlanAsync()
+    {
+        if (changingPowerPlan || exiting)
+            return;
+
+        Guid? active = null;
+        try
+        {
+            active = await WindowsPowerPlans.GetActiveAsync(lifetime.Token);
+        }
+        catch (Exception error) when (error is Win32Exception or InvalidOperationException or OperationCanceledException)
+        {
+            Trace.TraceWarning("Power plan query failed: {0}", error);
+        }
+        if (!changingPowerPlan && !exiting)
+            panel.SetPowerPlan(active);
+    }
+
+    private async Task ChangePowerPlanAsync(Guid requested)
+    {
+        if (changingPowerPlan || exiting)
+            return;
+
+        changingPowerPlan = true;
+        panel.SetPowerPlanBusy(true);
+        try
+        {
+            if (await WindowsPowerPlans.GetActiveAsync(lifetime.Token) != requested)
+                await WindowsPowerPlans.ApplyAsync(requested, lifetime.Token);
+            if (await WindowsPowerPlans.GetActiveAsync(lifetime.Token) != requested)
+                throw new InvalidOperationException("O Windows manteve outro plano ativo.");
+        }
+        catch (Exception error) when (error is Win32Exception or InvalidOperationException or OperationCanceledException)
+        {
+            if (!exiting)
+                MessageBox.Show(panel, error.Message, "Plano de energia",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        finally
+        {
+            changingPowerPlan = false;
+            if (!exiting)
+            {
+                await ReadPowerPlanAsync();
+                if (!exiting && !changingPowerPlan)
+                    panel.SetPowerPlanBusy(false);
+            }
+        }
     }
 
     private void ReadStartupState()
@@ -240,15 +334,16 @@ internal sealed class TrayContext : ApplicationContext
     {
         PowerReading reading = sensors.Read();
         double? cpu = PowerBreakdown.ReadCpuWatts(hardwareReadings);
-        LivePower live = LivePower.FromComponents(cpu, reading.GpuWatts);
-        panel.UpdateReading(live, cpu, reading.GpuWatts, hardwareReadings, driverInstalled);
+        double? monitorWatts = preferences.MonitorWatts;
+        LivePower live = LivePower.FromComponents(cpu, reading.GpuWatts, monitorWatts);
+        panel.UpdateReading(live, cpu, reading.GpuWatts, hardwareReadings, driverInstalled, monitorWatts);
         DateTimeOffset now = DateTimeOffset.Now;
         if (recordEnergy)
         {
-            energy.Record(now, reading.BatteryWatts, cpu + reading.GpuWatts);
+            energy.Record(now, reading.BatteryWatts, cpu + reading.GpuWatts, monitorWatts);
             energy.Save();
         }
-        panel.UpdateEnergy(energy.Summarize(now), energy.SaveError);
+        panel.UpdateEnergy(energy.Summarize(now), energy.SaveError ?? preferencesError, preferences.Tariff);
         string tooltip = live.Watts is double watts
             ? $"Energy View · {live.Label} · {watts:N1} W"
             : "Energy View · Sensores sem leitura";

@@ -1,12 +1,17 @@
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace EnergyView;
 
-internal readonly record struct EnergyTotals(double? MeasuredKwh, double? ComponentsKwh)
+internal readonly record struct EnergyTotals(double? MeasuredKwh, double? ComponentsKwh, double? MonitorsKwh = null)
 {
+    [JsonIgnore]
+    public double? EstimatedKwh => AddValue(ComponentsKwh, MonitorsKwh);
+
     public EnergyTotals Add(EnergyTotals other) => new(
-        AddValue(MeasuredKwh, other.MeasuredKwh), AddValue(ComponentsKwh, other.ComponentsKwh));
+        AddValue(MeasuredKwh, other.MeasuredKwh), AddValue(ComponentsKwh, other.ComponentsKwh),
+        AddValue(MonitorsKwh, other.MonitorsKwh));
 
     private static double? AddValue(double? first, double? second) =>
         first.HasValue || second.HasValue ? first.GetValueOrDefault() + second.GetValueOrDefault() : null;
@@ -50,9 +55,9 @@ internal sealed class EnergyHistory
         }
     }
 
-    public void Record(DateTimeOffset time, double? measuredWatts, double? componentsWatts)
+    public void Record(DateTimeOffset time, double? measuredWatts, double? componentsWatts, double? monitorWatts = null)
     {
-        var current = new Sample(time, measuredWatts, componentsWatts);
+        var current = new Sample(time, measuredWatts, componentsWatts, monitorWatts);
         Sample? last = previous;
         previous = current;
         if (last is not Sample start)
@@ -72,7 +77,10 @@ internal sealed class EnergyHistory
             double seconds = (end - cursor).TotalSeconds;
             var energy = new EnergyTotals(
                 Integrate(start.MeasuredWatts, current.MeasuredWatts, firstFraction, lastFraction, seconds),
-                Integrate(start.ComponentsWatts, current.ComponentsWatts, firstFraction, lastFraction, seconds));
+                Integrate(start.ComponentsWatts, current.ComponentsWatts, firstFraction, lastFraction, seconds),
+                start.MonitorWatts == current.MonitorWatts
+                    ? Integrate(start.MonitorWatts, current.MonitorWatts, firstFraction, lastFraction, seconds)
+                    : null);
 
             if (energy != default)
             {
@@ -143,5 +151,6 @@ internal sealed class EnergyHistory
         return averageWatts * (seconds / 3_600_000d);
     }
 
-    private readonly record struct Sample(DateTimeOffset Time, double? MeasuredWatts, double? ComponentsWatts);
+    private readonly record struct Sample(DateTimeOffset Time, double? MeasuredWatts, double? ComponentsWatts,
+        double? MonitorWatts);
 }

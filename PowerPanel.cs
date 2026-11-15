@@ -2,7 +2,7 @@ namespace EnergyView;
 
 internal sealed class PowerPanel : Form
 {
-    private const int FullHeight = 579;
+    private const int FullHeight = 618;
     internal static readonly Color Accent = Color.FromArgb(197, 248, 110);
     private static readonly Color Ink = Color.FromArgb(237, 243, 234);
     private static readonly Color Muted = Color.FromArgb(165, 179, 172);
@@ -19,6 +19,11 @@ internal sealed class PowerPanel : Form
     private readonly PowerChart chart;
     private readonly Button driverButton;
     private readonly Button startupButton;
+    private readonly Button tariffButton;
+    private readonly Button monitorsButton;
+    private readonly ComboBox powerPlans;
+    private bool showingEnergy;
+    private bool driverActionAvailable;
 
     public PowerPanel()
     {
@@ -75,8 +80,28 @@ internal sealed class PowerPanel : Form
         content.Controls.Add(chart);
         content.Controls.Add(LabelAt("Últimos 60 s", 19, 209, 308, 19, Muted, 9));
 
-        var componentTab = ButtonAt("Componentes", 19, 231, 152, "Ver componentes");
-        var energyTab = ButtonAt("Energia acumulada", 179, 231, 152, "Ver energia acumulada");
+        content.Controls.Add(LabelAt("Plano de energia", 19, 231, 120, 32, Muted, 10));
+        powerPlans = new ComboBox
+        {
+            Bounds = new Rectangle(140, 237, 191, 26),
+            AccessibleName = "Plano de energia do Windows",
+            DropDownStyle = ComboBoxStyle.DropDownList,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Surface,
+            ForeColor = Ink
+        };
+        powerPlans.Items.AddRange(WindowsPowerPlans.Options.Cast<object>().ToArray());
+        powerPlans.DropDown += (_, _) => ReadPowerPlanRequested?.Invoke(this, EventArgs.Empty);
+        powerPlans.SelectionChangeCommitted += (_, _) =>
+        {
+            if (powerPlans.SelectedItem is PowerPlanOption plan && plan.Id != Guid.Empty)
+                PowerPlanRequested?.Invoke(plan.Id);
+        };
+        SetPowerPlan(null);
+        content.Controls.Add(powerPlans);
+
+        var componentTab = ButtonAt("Componentes", 19, 270, 152, "Ver componentes");
+        var energyTab = ButtonAt("Energia acumulada", 179, 270, 152, "Ver energia acumulada");
         content.Controls.Add(componentTab);
         content.Controls.Add(energyTab);
         components = CreateTable(("Componente", 50, false), ("Potência", 21, true), ("Origem", 29, false));
@@ -88,41 +113,80 @@ internal sealed class PowerPanel : Form
         };
         content.Controls.Add(components);
         energyTable = CreateTable(("Período", 28, false), ("PC medido", 36, true), ("CPU + GPU", 36, true));
-        energyTable.AccessibleName = "Energia acumulada em quilowatt-hora";
+        energyTable.AccessibleName = "Energia acumulada em quilowatt-hora e custo em reais";
+        energyTable.RowTemplate.Height = 43;
+        energyTable.DefaultCellStyle.WrapMode = DataGridViewTriState.True;
         energyTable.Rows.Add("Nesta hora", "—", "—");
         energyTable.Rows.Add("Hoje", "—", "—");
         energyTable.Rows.Add("Neste mês", "—", "—");
         content.Controls.Add(energyTable);
 
-        energyNote = LabelAt("Registra enquanto o Energy View está aberto.", 19, 504, 312, 24, Muted, 9);
+        energyNote = LabelAt("Registra enquanto o Energy View está aberto.", 19, 543, 312, 24, Muted, 9);
         energyNote.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
         content.Controls.Add(energyNote);
+        startupButton = ButtonAt("Iniciar com Windows", 19, 573, 152, "Iniciar com Windows");
+        startupButton.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
+        startupButton.Click += (_, _) => ToggleStartupRequested?.Invoke(this, EventArgs.Empty);
+        content.Controls.Add(startupButton);
+        driverButton = ButtonAt("Instalar PawnIO", 179, 573, 152, "Instalar o driver dos sensores da CPU");
+        driverButton.ForeColor = Accent;
+        driverButton.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
+        driverButton.Click += (_, _) => InstallDriverRequested?.Invoke(this, EventArgs.Empty);
+        content.Controls.Add(driverButton);
+        tariffButton = ButtonAt("Definir tarifa", 179, 573, 152, "Editar tarifa de energia em reais por kWh");
+        tariffButton.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
+        tariffButton.ForeColor = Accent;
+        tariffButton.Click += (_, _) => EditTariffRequested?.Invoke(this, EventArgs.Empty);
+        content.Controls.Add(tariffButton);
+        monitorsButton = ButtonAt("Monitores", 19, 573, 152, "Cadastrar monitores e potência");
+        monitorsButton.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
+        monitorsButton.Click += (_, _) => EditMonitorsRequested?.Invoke(this, EventArgs.Empty);
+        content.Controls.Add(monitorsButton);
         componentTab.Click += (_, _) => ShowEnergy(false);
         energyTab.Click += (_, _) => ShowEnergy(true);
         ShowEnergy(false);
 
         void ShowEnergy(bool show)
         {
+            showingEnergy = show;
             components.Visible = !show;
             energyTable.Visible = energyNote.Visible = show;
+            driverButton.Visible = !show && driverActionAvailable;
+            tariffButton.Visible = show;
+            monitorsButton.Visible = show;
+            startupButton.Visible = !show;
             componentTab.ForeColor = show ? Muted : Accent;
             energyTab.ForeColor = show ? Accent : Muted;
         }
-        startupButton = ButtonAt("Iniciar com Windows", 19, 534, 152, "Iniciar com Windows");
-        startupButton.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
-        startupButton.Click += (_, _) => ToggleStartupRequested?.Invoke(this, EventArgs.Empty);
-        content.Controls.Add(startupButton);
-        driverButton = ButtonAt("Instalar PawnIO", 179, 534, 152, "Instalar o driver dos sensores da CPU");
-        driverButton.ForeColor = Accent;
-        driverButton.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
-        driverButton.Click += (_, _) => InstallDriverRequested?.Invoke(this, EventArgs.Empty);
-        content.Controls.Add(driverButton);
     }
 
     protected override bool ShowWithoutActivation => true;
 
     public event EventHandler? InstallDriverRequested;
     public event EventHandler? ToggleStartupRequested;
+    public event EventHandler? EditTariffRequested;
+    public event EventHandler? EditMonitorsRequested;
+    public event EventHandler? ReadPowerPlanRequested;
+    public event Action<Guid>? PowerPlanRequested;
+
+    public void SetPowerPlan(Guid? active)
+    {
+        PowerPlanOption match = WindowsPowerPlans.Options.FirstOrDefault(option => option.Id == active);
+        if (match.Id != Guid.Empty)
+        {
+            powerPlans.SelectedItem = match;
+            if (powerPlans.Items.Count > WindowsPowerPlans.Options.Count)
+                powerPlans.Items.RemoveAt(WindowsPowerPlans.Options.Count);
+            return;
+        }
+
+        if (powerPlans.Items.Count > WindowsPowerPlans.Options.Count)
+            powerPlans.Items.RemoveAt(WindowsPowerPlans.Options.Count);
+        powerPlans.SelectedIndex = powerPlans.Items.Add(
+            new PowerPlanOption(Guid.Empty, active.HasValue ? "Outro plano do Windows" : "Plano indisponível"));
+    }
+
+    public void SetPowerPlanBusy(bool busy) => powerPlans.Enabled = !busy;
 
     public void SetStartupEnabled(bool enabled)
     {
@@ -133,7 +197,8 @@ internal sealed class PowerPanel : Form
 
     public void SetDriverAction(string? caption, bool busy)
     {
-        driverButton.Visible = caption is not null;
+        driverActionAvailable = caption is not null;
+        driverButton.Visible = driverActionAvailable && !showingEnergy;
         driverButton.Enabled = !busy;
         driverButton.Text = caption ?? "";
     }
@@ -142,35 +207,45 @@ internal sealed class PowerPanel : Form
     {
         double scale = DeviceDpi / 96d;
         ClientSize = new Size(ClientSize.Width, Math.Clamp(availableHeight,
-            (int)Math.Round(390 * scale), (int)Math.Round(FullHeight * scale)));
+            (int)Math.Round(429 * scale), (int)Math.Round(FullHeight * scale)));
     }
 
     public void UpdateReading(LivePower live, double? cpuWatts, double? gpuWatts,
-        IReadOnlyList<HardwarePowerSensor> hardwareReadings, bool cpuDriverInstalled)
+        IReadOnlyList<HardwarePowerSensor> hardwareReadings, bool cpuDriverInstalled, double? monitorWatts)
     {
         primaryName.Text = live.Label;
         primaryValue.Text = live.Watts is double value ? $"{value:N1} W" : "—";
-        device.Text = live.Watts.HasValue ? "Leitura dos sensores internos" : "Aguardando leitura dos sensores";
-        componentRows = PowerBreakdown.Build(hardwareReadings, cpuDriverInstalled, cpuWatts, gpuWatts);
+        device.Text = monitorWatts.HasValue ? "Inclui a potência estimada dos monitores" :
+            live.Watts.HasValue ? "Leitura dos sensores internos" : "Aguardando leitura dos sensores";
+        componentRows = PowerBreakdown.Build(hardwareReadings, cpuDriverInstalled, cpuWatts, gpuWatts, monitorWatts);
         RefreshComponentRows();
         chart.AddReading(live.Watts, live.Label);
     }
 
-    public void UpdateEnergy(EnergySummary summary, string? saveError)
+    public void UpdateEnergy(EnergySummary summary, string? saveError, decimal? tariff)
     {
         EnergyTotals[] periods = [summary.Hour, summary.Day, summary.Month];
         energyTable.Columns[1].Visible = periods.Any(period => period.MeasuredKwh.HasValue);
+        bool includesMonitors = periods.Any(period => period.MonitorsKwh.HasValue);
+        bool includesComponents = periods.Any(period => period.ComponentsKwh.HasValue);
+        energyTable.Columns[2].HeaderText = !includesMonitors ? "CPU + GPU" :
+            includesComponents ? "CPU + GPU + mon." : "Monitores";
         for (int index = 0; index < periods.Length; index++)
         {
-            energyTable.Rows[index].Cells[1].Value = FormatEnergy(periods[index].MeasuredKwh);
-            energyTable.Rows[index].Cells[2].Value = FormatEnergy(periods[index].ComponentsKwh);
+            energyTable.Rows[index].Cells[1].Value = EnergyTariff.FormatPeriod(periods[index].MeasuredKwh, tariff);
+            DataGridViewCell combined = energyTable.Rows[index].Cells[2];
+            combined.Value = EnergyTariff.FormatPeriod(periods[index].EstimatedKwh, tariff);
+            combined.ToolTipText = periods[index].MonitorsKwh.HasValue
+                ? $"CPU + GPU · {EnergyTariff.FormatPeriod(periods[index].ComponentsKwh, null)}\n" +
+                    $"Monitores · {EnergyTariff.FormatPeriod(periods[index].MonitorsKwh, null)}"
+                : "";
         }
         if (!energyTable.Focused)
             energyTable.ClearSelection();
-        energyNote.Text = saveError ?? "Registra enquanto o Energy View está aberto.";
+        energyNote.Text = saveError ?? (includesMonitors ? "Monitores estimados pelos watts cadastrados." :
+            tariff.HasValue ? "Custo estimado pela tarifa cadastrada." : "Registra enquanto o Energy View está aberto.");
+        tariffButton.Text = tariff is decimal price ? $"R$ {EnergyTariff.FormatRate(price)}/kWh" : "Definir tarifa";
     }
-
-    private static string FormatEnergy(double? energy) => energy is double kwh ? $"{kwh:N4} kWh" : "—";
 
     private bool ToggleGroup(int rowIndex)
     {
@@ -223,7 +298,7 @@ internal sealed class PowerPanel : Form
         var table = new DataGridView
         {
             AccessibleName = "Potência por componente",
-            Bounds = new Rectangle(19, 271, 312, 229),
+            Bounds = new Rectangle(19, 310, 312, 229),
             Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left,
             Font = new Font("Segoe UI", 9),
             AllowUserToAddRows = false,

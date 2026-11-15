@@ -10,6 +10,10 @@ Use **Iniciar com Windows** para abrir o monitor na bandeja após entrar na sua 
 
 A aba **Energia acumulada** soma os kWh das leituras de CPU e GPU válidas enquanto o app roda. O histórico fica em `%LOCALAPPDATA%\EnergyView\energy-history.json`.
 
+Nessa aba, use **Definir tarifa** para cadastrar o valor em R$/kWh e **Monitores** para registrar a potência em watts das telas. As telas marcadas como ligadas entram na estimativa enquanto o app roda. A tarifa vigente calcula o custo sobre o histórico registrado.
+
+O seletor **Plano de energia** aplica o plano no Windows. **Máxima economia** cria um plano baseado no modo de economia com estado máximo da CPU em 70%. **Econômico**, **Médio** e **Desempenho máximo** usam os planos Economia de energia, Equilibrado e Alto desempenho do Windows.
+
 ## Build e publicação
 
 Use `dotnet build -c Release` com o SDK .NET 10. Uma tag estável no formato `v1.2.3` dispara o workflow **Windows release**, que compila o app, gera o instalador com Inno Setup e publica o executável na release correspondente.
