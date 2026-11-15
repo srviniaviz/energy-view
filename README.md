@@ -6,7 +6,7 @@ Monitor de potência dos sensores internos e histórico de energia em kWh na ban
 
 Baixe o instalador x64 da [release mais recente](https://github.com/srviniaviz/energy-view/releases/latest). O app começa a ler os sensores quando abre. A leitura da CPU usa o [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) e o driver oficial [PawnIO](https://pawnio.eu/). Se o driver estiver ausente, o painel oferece a instalação.
 
-Use **Iniciar com Windows** para abrir o monitor na bandeja após entrar na sua conta. O app instalado consulta as releases do GitHub automaticamente e avisa quando há uma atualização. Para consultar na hora, clique com o botão direito no ícone da bandeja e escolha **Verificar atualizações**.
+Em **Configurações**, use **Iniciar com Windows** para abrir o monitor na bandeja após entrar na sua conta. O app verifica a publicação mais recente ao abrir e mostra o resultado em **Atualizações**. Use **Verificar** para consultar novamente ou **Atualizar** para baixar, validar e abrir o instalador.
 
 A aba **Energia acumulada** soma os kWh das leituras de CPU e GPU válidas enquanto o app roda. O histórico fica em `%LOCALAPPDATA%\EnergyView\energy-history.json`.
 
@@ -16,4 +16,4 @@ O seletor **Plano de energia** aplica o plano no Windows. **Máxima economia** c
 
 ## Build e publicação
 
-Use `dotnet build -c Release` com o SDK .NET 10. Uma tag estável no formato `v1.2.3` dispara o workflow **Windows release**, que compila o app, gera o instalador com Inno Setup e publica o executável na release correspondente.
+Use `dotnet build -c Release` com o SDK .NET 10. Um push na branch `main` dispara o workflow **Windows release**, que calcula a versão, gera o instalador com Inno Setup e publica a tag e a release correspondentes.

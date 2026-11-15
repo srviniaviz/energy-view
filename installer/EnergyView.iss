@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.1.1"
+  #define AppVersion "0.1.2"
 #endif
 #ifndef PublishDir
   #define PublishDir "..\dist\app"
@@ -41,7 +41,7 @@ Name: "{group}\Energy View"; Filename: "{app}\EnergyView.exe"
 
 [Run]
 Filename: "{app}\EnergyView.exe"; Description: "{cm:LaunchProgram,Energy View}"; Flags: nowait postinstall skipifsilent runascurrentuser; Check: not IsUpdate
-Filename: "{app}\EnergyView.exe"; Flags: nowait skipifnotsilent; Check: IsUpdate
+Filename: "{app}\EnergyView.exe"; Flags: nowait; Check: IsUpdate
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\updates"

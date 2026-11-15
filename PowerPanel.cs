@@ -21,9 +21,14 @@ internal sealed class PowerPanel : Form
     private readonly Button startupButton;
     private readonly Button tariffButton;
     private readonly Button monitorsButton;
+    private readonly Button settingsTab;
+    private readonly Panel settings;
+    private readonly Label updateStatus;
+    private readonly Button updateButton;
     private readonly ComboBox powerPlans;
-    private bool showingEnergy;
+    private bool showingSettings;
     private bool driverActionAvailable;
+    private bool updateAvailable;
 
     public PowerPanel()
     {
@@ -100,10 +105,12 @@ internal sealed class PowerPanel : Form
         SetPowerPlan(null);
         content.Controls.Add(powerPlans);
 
-        var componentTab = ButtonAt("Componentes", 19, 270, 152, "Ver componentes");
-        var energyTab = ButtonAt("Energia acumulada", 179, 270, 152, "Ver energia acumulada");
+        var componentTab = ButtonAt("Componentes", 19, 270, 110, "Ver componentes");
+        var energyTab = ButtonAt("Energia", 135, 270, 65, "Ver energia acumulada");
+        settingsTab = ButtonAt("Configurações", 206, 270, 125, "Abrir configurações");
         content.Controls.Add(componentTab);
         content.Controls.Add(energyTab);
+        content.Controls.Add(settingsTab);
         components = CreateTable(("Componente", 50, false), ("Potência", 21, true), ("Origem", 29, false));
         components.CellClick += (_, args) => ToggleGroup(args.RowIndex);
         components.KeyDown += (_, args) =>
@@ -120,6 +127,20 @@ internal sealed class PowerPanel : Form
         energyTable.Rows.Add("Hoje", "—", "—");
         energyTable.Rows.Add("Neste mês", "—", "—");
         content.Controls.Add(energyTable);
+
+        settings = new Panel
+        {
+            Bounds = new Rectangle(19, 310, 312, 229),
+            Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left,
+            AutoScroll = true
+        };
+        settings.Controls.Add(LabelAt("Atualizações", 0, 0, 212, 24, Ink, 10, FontStyle.Bold));
+        updateStatus = LabelAt("Preparando verificação…", 0, 28, 204, 46, Muted, 9);
+        settings.Controls.Add(updateStatus);
+        updateButton = ButtonAt("Verificar", 216, 14, 96, "Verificar ou instalar atualização");
+        updateButton.Click += (_, _) => UpdateRequested?.Invoke(this, EventArgs.Empty);
+        settings.Controls.Add(updateButton);
+        content.Controls.Add(settings);
 
         energyNote = LabelAt("Registra enquanto o Energy View está aberto.", 19, 543, 312, 24, Muted, 9);
         energyNote.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
@@ -142,21 +163,24 @@ internal sealed class PowerPanel : Form
         monitorsButton.Anchor = AnchorStyles.Left | AnchorStyles.Bottom;
         monitorsButton.Click += (_, _) => EditMonitorsRequested?.Invoke(this, EventArgs.Empty);
         content.Controls.Add(monitorsButton);
-        componentTab.Click += (_, _) => ShowEnergy(false);
-        energyTab.Click += (_, _) => ShowEnergy(true);
-        ShowEnergy(false);
+        componentTab.Click += (_, _) => ShowTab(components);
+        energyTab.Click += (_, _) => ShowTab(energyTable);
+        settingsTab.Click += (_, _) => ShowTab(settings);
+        ShowTab(components);
 
-        void ShowEnergy(bool show)
+        void ShowTab(Control tab)
         {
-            showingEnergy = show;
-            components.Visible = !show;
-            energyTable.Visible = energyNote.Visible = show;
-            driverButton.Visible = !show && driverActionAvailable;
-            tariffButton.Visible = show;
-            monitorsButton.Visible = show;
-            startupButton.Visible = !show;
-            componentTab.ForeColor = show ? Muted : Accent;
-            energyTab.ForeColor = show ? Accent : Muted;
+            bool showEnergy = tab == energyTable;
+            showingSettings = tab == settings;
+            components.Visible = tab == components;
+            energyTable.Visible = energyNote.Visible = showEnergy;
+            settings.Visible = showingSettings;
+            driverButton.Visible = showingSettings && driverActionAvailable;
+            tariffButton.Visible = monitorsButton.Visible = showEnergy;
+            startupButton.Visible = showingSettings;
+            componentTab.ForeColor = tab == components ? Accent : Muted;
+            energyTab.ForeColor = showEnergy ? Accent : Muted;
+            RefreshSettingsTab();
         }
     }
 
@@ -168,6 +192,26 @@ internal sealed class PowerPanel : Form
     public event EventHandler? EditMonitorsRequested;
     public event EventHandler? ReadPowerPlanRequested;
     public event Action<Guid>? PowerPlanRequested;
+    public event EventHandler? UpdateRequested;
+
+    public void ShowUpdateSettings() => settingsTab.PerformClick();
+
+    public void SetUpdateStatus(string status, bool busy, bool available, bool installed)
+    {
+        updateAvailable = available;
+        updateStatus.Text = status;
+        updateStatus.AccessibleDescription = status;
+        updateButton.Enabled = !busy;
+        updateButton.Text = !available ? "Verificar" : installed ? "Atualizar" : "Baixar";
+        RefreshSettingsTab();
+    }
+
+    private void RefreshSettingsTab()
+    {
+        settingsTab.ForeColor = showingSettings || updateAvailable ? Accent : Muted;
+        settingsTab.Text = updateAvailable ? "Configurações •" : "Configurações";
+        settingsTab.AccessibleDescription = updateAvailable ? "Atualização disponível" : "";
+    }
 
     public void SetPowerPlan(Guid? active)
     {
@@ -198,7 +242,7 @@ internal sealed class PowerPanel : Form
     public void SetDriverAction(string? caption, bool busy)
     {
         driverActionAvailable = caption is not null;
-        driverButton.Visible = driverActionAvailable && !showingEnergy;
+        driverButton.Visible = driverActionAvailable && showingSettings;
         driverButton.Enabled = !busy;
         driverButton.Text = caption ?? "";
     }

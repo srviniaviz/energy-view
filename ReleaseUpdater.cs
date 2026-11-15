@@ -10,6 +10,7 @@ internal sealed class ReleaseUpdater : IDisposable
     internal const string Repository = "srviniaviz/energy-view";
     internal const string ReleasesPage = $"https://github.com/{Repository}/releases/latest";
     private const long MaxInstallerBytes = 200 * 1024 * 1024;
+    internal static Version CurrentVersion { get; } = ReadCurrentVersion();
     private readonly HttpClient client = new()
     {
         Timeout = TimeSpan.FromMinutes(3),
@@ -23,8 +24,7 @@ internal sealed class ReleaseUpdater : IDisposable
         byte[] body = await client.GetByteArrayAsync(
             $"https://api.github.com/repos/{Repository}/releases/latest", cancellationToken);
         using JsonDocument document = JsonDocument.Parse(body);
-        Version current = typeof(ReleaseUpdater).Assembly.GetName().Version!;
-        return ParseRelease(document.RootElement, new Version(current.Major, current.Minor, current.Build));
+        return ParseRelease(document.RootElement, CurrentVersion);
     }
 
     internal static AppRelease? ParseRelease(JsonElement release, Version current)
@@ -51,7 +51,7 @@ internal sealed class ReleaseUpdater : IDisposable
                 digest.Length == 71 && digest.AsSpan(7).ContainsOnlyHex() && size is > 0 and <= MaxInstallerBytes)
                 return new AppRelease(version, new Uri(url), digest[7..], size);
         }
-        return null;
+        throw new InvalidDataException("A versão mais recente não tem um instalador com dados válidos.");
     }
 
     public async Task<string> DownloadAsync(AppRelease release, CancellationToken cancellationToken)
@@ -62,6 +62,7 @@ internal sealed class ReleaseUpdater : IDisposable
         string directory = Path.Combine(AppInstallation.DirectoryPath, "updates");
         Directory.CreateDirectory(directory);
         string path = Path.Combine(directory, Path.GetFileName(release.Download.AbsolutePath));
+        string partial = path + ".download";
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromMinutes(5));
         try
@@ -69,31 +70,51 @@ internal sealed class ReleaseUpdater : IDisposable
             using HttpResponseMessage response = await client.GetAsync(release.Download,
                 HttpCompletionOption.ResponseHeadersRead, timeout.Token);
             response.EnsureSuccessStatusCode();
+            Uri? finalUrl = response.RequestMessage?.RequestUri;
+            if (finalUrl?.Scheme != Uri.UriSchemeHttps || finalUrl.Host is not
+                ("github.com" or "release-assets.githubusercontent.com" or "objects.githubusercontent.com"))
+                throw new InvalidDataException("O download foi redirecionado para um endereço inesperado.");
             await using Stream source = await response.Content.ReadAsStreamAsync(timeout.Token);
-            await using var destination = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true);
-            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            byte[] buffer = new byte[81920];
-            long total = 0;
-            int read;
-            while ((read = await source.ReadAsync(buffer, timeout.Token)) != 0)
+            await using (var destination = new FileStream(partial, FileMode.Create, FileAccess.Write, FileShare.None, 81920, true))
             {
-                total += read;
-                if (total > release.Size)
-                    throw new InvalidDataException("O instalador recebido excede o tamanho publicado.");
-                hash.AppendData(buffer.AsSpan(0, read));
-                await destination.WriteAsync(buffer.AsMemory(0, read), timeout.Token);
+                await CopyVerifiedAsync(source, destination, release, timeout.Token);
+                await destination.FlushAsync(timeout.Token);
             }
-            if (total != release.Size || !string.Equals(Convert.ToHexString(hash.GetHashAndReset()),
-                release.Sha256, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("O instalador recebido não corresponde à release do GitHub.");
+            File.Move(partial, path, overwrite: true);
             return path;
         }
         catch
         {
-            try { File.Delete(path); }
+            try { File.Delete(partial); }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
             throw;
         }
+    }
+
+    internal static async Task CopyVerifiedAsync(Stream source, Stream destination, AppRelease release,
+        CancellationToken cancellationToken)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        byte[] buffer = new byte[81920];
+        long total = 0;
+        int read;
+        while ((read = await source.ReadAsync(buffer, cancellationToken)) != 0)
+        {
+            total += read;
+            if (total > release.Size)
+                throw new InvalidDataException("O instalador recebido excede o tamanho publicado.");
+            hash.AppendData(buffer.AsSpan(0, read));
+            await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+        }
+        if (total != release.Size || !string.Equals(Convert.ToHexString(hash.GetHashAndReset()),
+            release.Sha256, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("O instalador recebido não corresponde à release do GitHub.");
+    }
+
+    private static Version ReadCurrentVersion()
+    {
+        Version version = typeof(ReleaseUpdater).Assembly.GetName().Version!;
+        return new Version(version.Major, version.Minor, version.Build);
     }
 
     public void Dispose() => client.Dispose();

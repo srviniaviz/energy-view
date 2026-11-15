@@ -27,7 +27,7 @@ internal sealed class TrayContext : ApplicationContext
     private readonly ToolStripMenuItem updateAction = new("Verificar atualizações");
     private readonly ReleaseUpdater updater = new();
     private readonly CancellationTokenSource lifetime = new();
-    private readonly System.Windows.Forms.Timer updateTimer = new() { Interval = 5000 };
+    private readonly System.Windows.Forms.Timer updateTimer = new() { Interval = 1000 };
     private readonly bool installed = AppInstallation.IsInstalled;
     private readonly bool elevated;
     private AppRelease? availableUpdate;
@@ -59,7 +59,11 @@ internal sealed class TrayContext : ApplicationContext
         menu.Items.Add(toggle);
         driverAction.Click += async (_, _) => await InstallDriverAsync();
         startupAction.Click += (_, _) => ToggleStartup();
-        updateAction.Click += async (_, _) => await HandleUpdateAsync();
+        updateAction.Click += async (_, _) =>
+        {
+            OpenUpdateSettings();
+            await HandleUpdateAsync();
+        };
         menu.Items.Add(driverAction);
         menu.Items.Add(startupAction);
         menu.Items.Add(updateAction);
@@ -78,7 +82,7 @@ internal sealed class TrayContext : ApplicationContext
             if (args.Button == MouseButtons.Left)
                 TogglePanel();
         };
-        tray.BalloonTipClicked += async (_, _) => await HandleUpdateAsync();
+        tray.BalloonTipClicked += (_, _) => OpenUpdateSettings();
 
         panel.Icon = icon;
         panel.FormClosing += (_, args) =>
@@ -97,6 +101,7 @@ internal sealed class TrayContext : ApplicationContext
         panel.PowerPlanRequested += async plan => await ChangePowerPlanAsync(plan);
         panel.EditTariffRequested += (_, _) => EditTariff();
         panel.EditMonitorsRequested += (_, _) => EditMonitors();
+        panel.UpdateRequested += async (_, _) => await HandleUpdateAsync();
         panel.ToggleStartupRequested += (_, _) => ToggleStartup();
 
         timer.Tick += async (_, _) => await RefreshReadingAsync();
@@ -107,11 +112,10 @@ internal sealed class TrayContext : ApplicationContext
         ReadStartupState();
         updateTimer.Tick += async (_, _) =>
         {
-            updateTimer.Interval = (int)TimeSpan.FromHours(4).TotalMilliseconds;
-            await CheckForUpdatesAsync(interactive: false);
+            updateTimer.Stop();
+            await CheckForUpdatesAsync();
         };
-        if (installed)
-            updateTimer.Start();
+        updateTimer.Start();
         timer.Start();
     }
 
@@ -222,12 +226,29 @@ internal sealed class TrayContext : ApplicationContext
         }
     }
 
-    private async Task CheckForUpdatesAsync(bool interactive)
+    private void OpenUpdateSettings()
+    {
+        if (!panel.Visible)
+            ShowPanel();
+        panel.ShowUpdateSettings();
+    }
+
+    private void ShowUpdateStatus(string message)
+    {
+        updateAction.Enabled = !updating;
+        updateAction.Text = availableUpdate is AppRelease release
+            ? $"Atualizar para v{release.Version}" : "Verificar atualizações";
+        panel.SetUpdateStatus(message, updating, availableUpdate.HasValue, installed);
+    }
+
+    private async Task CheckForUpdatesAsync()
     {
         if (updating || exiting)
             return;
 
         updating = true;
+        ShowUpdateStatus("Verificando atualizações…");
+        string status;
         try
         {
             AppRelease? release = await updater.FindAsync(lifetime.Token);
@@ -235,33 +256,37 @@ internal sealed class TrayContext : ApplicationContext
                 return;
             bool newlyAvailable = release.HasValue && release.Value.Version != availableUpdate?.Version;
             availableUpdate = release;
-            updateAction.Text = release is AppRelease value
-                ? $"Instalar atualização {value.Version}" : "Verificar atualizações";
-            if (newlyAvailable && !interactive)
+            status = release is AppRelease value ? $"Versão {value.Version} disponível."
+                : $"Energy View atualizado · v{ReleaseUpdater.CurrentVersion}.";
+            if (newlyAvailable && !panel.Visible)
                 tray.ShowBalloonTip(6000, "Atualização do Energy View",
-                    $"A versão {availableUpdate!.Value.Version} está disponível. Clique para instalar.", ToolTipIcon.Info);
-            else if (interactive && !release.HasValue)
-                MessageBox.Show(panel.Visible ? panel : null, "O Energy View está atualizado.",
-                    "Atualizações", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    "Abra as configurações para atualizar.", ToolTipIcon.Info);
         }
         catch (Exception error) when (error is HttpRequestException or OperationCanceledException or
-            System.Text.Json.JsonException or InvalidOperationException or KeyNotFoundException or FormatException)
+            System.Text.Json.JsonException or InvalidOperationException or KeyNotFoundException or FormatException
+            or InvalidDataException)
         {
             Trace.TraceWarning("Release check failed: {0}", error);
-            if (interactive && !exiting)
-                MessageBox.Show(panel.Visible ? panel : null, "Não foi possível consultar as releases do GitHub.",
-                    "Atualizações", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            status = error is InvalidDataException ? error.Message : "Não foi possível verificar atualizações.";
         }
         finally
         {
             updating = false;
         }
+        if (!exiting)
+            ShowUpdateStatus(status);
     }
 
     private async Task HandleUpdateAsync()
     {
         if (updating || exiting)
             return;
+        if (availableUpdate is not AppRelease release)
+        {
+            await CheckForUpdatesAsync();
+            return;
+        }
+
         if (!installed)
         {
             try
@@ -271,28 +296,24 @@ internal sealed class TrayContext : ApplicationContext
             }
             catch (Win32Exception error)
             {
-                MessageBox.Show(panel.Visible ? panel : null, error.Message, "Atualizações",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                Trace.TraceWarning("Could not open the release page: {0}", error);
+                ShowUpdateStatus("Não foi possível abrir a página da versão.");
             }
             return;
         }
 
-        if (!availableUpdate.HasValue)
-            await CheckForUpdatesAsync(interactive: true);
-        if (availableUpdate is not AppRelease release || updating || exiting ||
-            MessageBox.Show(panel.Visible ? panel : null, $"Instalar a versão {release.Version} do Energy View?",
-                "Atualização disponível", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
-            return;
-
         updating = true;
-        updateAction.Text = "Baixando atualização…";
+        ShowUpdateStatus("Baixando e validando o instalador…");
+        string status = "";
+        bool installerVerified = false;
         try
         {
             string path = await updater.DownloadAsync(release, lifetime.Token);
+            installerVerified = true;
             if (exiting)
                 return;
             using Process setup = Process.Start(new ProcessStartInfo(path,
-                "/SILENT /SP- /NORESTART /UPDATE=1")
+                "/SP- /NORESTART /UPDATE=1")
                 { UseShellExecute = true, WorkingDirectory = AppInstallation.DirectoryPath })
                 ?? throw new InvalidOperationException("Não foi possível iniciar o instalador.");
             ExitThread();
@@ -300,15 +321,15 @@ internal sealed class TrayContext : ApplicationContext
         catch (Exception error) when (error is HttpRequestException or OperationCanceledException or IOException
             or InvalidDataException or UnauthorizedAccessException or Win32Exception or InvalidOperationException)
         {
-            if (!exiting)
-                MessageBox.Show(panel.Visible ? panel : null, error.Message,
-                    "Falha na atualização", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            Trace.TraceWarning("Update failed: {0}", error);
+            status = error is InvalidDataException ? error.Message : installerVerified
+                ? "Não foi possível abrir o instalador da atualização." : "Não foi possível baixar o instalador.";
         }
         finally
         {
             updating = false;
             if (!exiting)
-                updateAction.Text = $"Instalar atualização {release.Version}";
+                ShowUpdateStatus(status);
         }
     }
 
