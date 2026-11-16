@@ -21,6 +21,9 @@ internal sealed class PowerPanel : Form
     private readonly Button startupButton;
     private readonly Button tariffButton;
     private readonly Button monitorsButton;
+    private readonly Panel tariffEditor;
+    private readonly TextBox tariffInput;
+    private readonly Label tariffFeedback;
     private readonly Button settingsTab;
     private readonly Panel settings;
     private readonly Label updateStatus;
@@ -44,11 +47,6 @@ internal sealed class PowerPanel : Form
         ForeColor = Ink;
         Font = new Font("Segoe UI", 10);
         KeyPreview = true;
-        KeyDown += (_, args) =>
-        {
-            if (args.KeyCode == Keys.Escape)
-                Hide();
-        };
 
         var border = new Panel { Dock = DockStyle.Fill, Padding = new Padding(1), BackColor = Rule };
         var content = new Panel { Dock = DockStyle.Fill, BackColor = Surface };
@@ -128,6 +126,38 @@ internal sealed class PowerPanel : Form
         energyTable.Rows.Add("Neste mês", "—", "—");
         content.Controls.Add(energyTable);
 
+        tariffEditor = new Panel
+        {
+            Bounds = energyTable.Bounds,
+            Anchor = energyTable.Anchor,
+            AutoScroll = true
+        };
+        tariffEditor.Controls.Add(LabelAt("Tarifa de energia (R$/kWh)", 0, 0, 300, 26, Ink, 10, FontStyle.Bold));
+        tariffInput = new TextBox
+        {
+            AccessibleName = "Tarifa em reais por quilowatt-hora",
+            PlaceholderText = "0,95",
+            Bounds = new Rectangle(0, 34, 291, 24),
+            BackColor = Surface,
+            ForeColor = Ink
+        };
+        tariffFeedback = LabelAt("", 0, 62, 291, 26, Muted, 9);
+        var saveTariff = ButtonAt("Salvar", 126, 94, 78, "Salvar tarifa");
+        saveTariff.ForeColor = Accent;
+        saveTariff.Click += (_, _) => SaveTariff();
+        var cancelTariff = ButtonAt("Cancelar", 212, 94, 79, "Cancelar edição da tarifa");
+        cancelTariff.Click += (_, _) => CloseTariffEditor();
+        tariffInput.KeyDown += (_, args) =>
+        {
+            if (args.KeyCode == Keys.Enter)
+            {
+                args.SuppressKeyPress = true;
+                SaveTariff();
+            }
+        };
+        tariffEditor.Controls.AddRange([tariffInput, tariffFeedback, saveTariff, cancelTariff]);
+        content.Controls.Add(tariffEditor);
+
         settings = new Panel
         {
             Bounds = new Rectangle(19, 310, 312, 229),
@@ -167,12 +197,23 @@ internal sealed class PowerPanel : Form
         energyTab.Click += (_, _) => ShowTab(energyTable);
         settingsTab.Click += (_, _) => ShowTab(settings);
         ShowTab(components);
+        KeyDown += (_, args) =>
+        {
+            if (args.KeyCode != Keys.Escape)
+                return;
+            if (tariffEditor.Visible)
+                CloseTariffEditor();
+            else
+                Hide();
+            args.SuppressKeyPress = true;
+        };
 
         void ShowTab(Control tab)
         {
             bool showEnergy = tab == energyTable;
             showingSettings = tab == settings;
             components.Visible = tab == components;
+            tariffEditor.Visible = false;
             energyTable.Visible = energyNote.Visible = showEnergy;
             settings.Visible = showingSettings;
             driverButton.Visible = showingSettings && driverActionAvailable;
@@ -189,10 +230,51 @@ internal sealed class PowerPanel : Form
     public event EventHandler? InstallDriverRequested;
     public event EventHandler? ToggleStartupRequested;
     public event EventHandler? EditTariffRequested;
+    public event Action<decimal?>? SaveTariffRequested;
     public event EventHandler? EditMonitorsRequested;
     public event EventHandler? ReadPowerPlanRequested;
     public event Action<Guid>? PowerPlanRequested;
     public event EventHandler? UpdateRequested;
+
+    public void OpenTariffEditor(decimal? current)
+    {
+        tariffInput.Text = current is decimal rate ? EnergyTariff.FormatRate(rate) : "";
+        tariffFeedback.Text = "Deixe em branco para remover a tarifa.";
+        tariffFeedback.ForeColor = Muted;
+        tariffEditor.Visible = true;
+        energyTable.Visible = energyNote.Visible = tariffButton.Visible = monitorsButton.Visible = false;
+        Activate();
+        tariffInput.Focus();
+        tariffInput.SelectAll();
+    }
+
+    private void SaveTariff()
+    {
+        if (!EnergyTariff.TryParse(tariffInput.Text, out decimal? rate))
+        {
+            tariffFeedback.Text = "Digite uma tarifa válida, como 0,95.";
+            tariffFeedback.ForeColor = Accent;
+            tariffInput.Focus();
+            return;
+        }
+        try
+        {
+            SaveTariffRequested?.Invoke(rate);
+            CloseTariffEditor();
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            tariffFeedback.Text = "Não foi possível salvar a tarifa.";
+            tariffFeedback.ForeColor = Accent;
+        }
+    }
+
+    private void CloseTariffEditor()
+    {
+        tariffEditor.Visible = false;
+        energyTable.Visible = energyNote.Visible = tariffButton.Visible = monitorsButton.Visible = true;
+        tariffButton.Focus();
+    }
 
     public void ShowUpdateSettings() => settingsTab.PerformClick();
 

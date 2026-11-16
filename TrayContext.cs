@@ -99,7 +99,12 @@ internal sealed class TrayContext : ApplicationContext
         panel.Shown += async (_, _) => await ReadPowerPlanAsync();
         panel.ReadPowerPlanRequested += async (_, _) => await ReadPowerPlanAsync();
         panel.PowerPlanRequested += async plan => await ChangePowerPlanAsync(plan);
-        panel.EditTariffRequested += (_, _) => EditTariff();
+        panel.EditTariffRequested += (_, _) => panel.OpenTariffEditor(preferences.Tariff);
+        panel.SaveTariffRequested += rate =>
+        {
+            SaveEnergyPreferences(preferences with { Tariff = rate });
+            UpdateDisplay();
+        };
         panel.EditMonitorsRequested += (_, _) => EditMonitors();
         panel.UpdateRequested += async (_, _) => await HandleUpdateAsync();
         panel.ToggleStartupRequested += (_, _) => ToggleStartup();
@@ -117,14 +122,6 @@ internal sealed class TrayContext : ApplicationContext
         };
         updateTimer.Start();
         timer.Start();
-    }
-
-    private void EditTariff()
-    {
-        using var dialog = new TariffDialog(preferences.Tariff, rate =>
-            SaveEnergyPreferences(preferences with { Tariff = rate }));
-        if (dialog.ShowDialog(panel) == DialogResult.OK)
-            UpdateDisplay();
     }
 
     private void EditMonitors()
