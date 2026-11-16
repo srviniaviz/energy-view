@@ -1,3 +1,4 @@
+using System.Drawing.Drawing2D;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
@@ -19,7 +20,7 @@ internal sealed class TrayContext : ApplicationContext
     private readonly PowerPanel panel = new();
     private readonly System.Windows.Forms.Timer timer = new() { Interval = 1000 };
     private readonly ContextMenuStrip menu = new();
-    private readonly Icon icon = LoadTrayIcon();
+    private readonly Icon icon = CreateTrayIcon();
     private readonly NotifyIcon tray;
     private readonly ToolStripMenuItem driverAction = new();
     private readonly ToolStripMenuItem startupAction = new();
@@ -466,10 +467,31 @@ internal sealed class TrayContext : ApplicationContext
         base.Dispose(disposing);
     }
 
-    private static Icon LoadTrayIcon()
+    private static Icon CreateTrayIcon()
     {
-        using Stream source = typeof(TrayContext).Assembly.GetManifestResourceStream("EnergyView.AppIcon.ico")
-            ?? throw new InvalidOperationException("Ícone do Energy View não encontrado.");
-        return new Icon(source, SystemInformation.SmallIconSize);
+        using var bitmap = new Bitmap(32, 32);
+        using var graphics = Graphics.FromImage(bitmap);
+        graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        using var brush = new SolidBrush(PowerPanel.Accent);
+        graphics.FillPolygon(brush,
+        [
+            new Point(17, 2), new Point(6, 18), new Point(14, 18),
+            new Point(12, 30), new Point(27, 12), new Point(18, 12), new Point(21, 2)
+        ]);
+
+        nint handle = bitmap.GetHicon();
+        try
+        {
+            using Icon borrowed = Icon.FromHandle(handle);
+            return (Icon)borrowed.Clone();
+        }
+        finally
+        {
+            DestroyIcon(handle);
+        }
     }
+
+    [DllImport("user32.dll", ExactSpelling = true)]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    private static extern bool DestroyIcon(nint icon);
 }
