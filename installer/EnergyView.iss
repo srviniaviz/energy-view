@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.1.3"
+  #define AppVersion "0.1.4"
 #endif
 #ifndef PublishDir
   #define PublishDir "..\dist\app"
@@ -21,6 +21,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0.17763
 UninstallDisplayIcon={app}\EnergyView.exe
+SetupIconFile=..\Assets\EnergyView.ico
 OutputDir=..\dist\release
 OutputBaseFilename=EnergyView-Setup-v{#AppVersion}-x64
 Compression=lzma2
